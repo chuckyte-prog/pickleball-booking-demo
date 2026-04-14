@@ -291,7 +291,7 @@ async def scrape_calendar(page: Page, target_date: str) -> list:
 
 
 async def run(start_date: str, end_date: str, headless: bool = False) -> dict:
-    chrome_profile = get_env("CHROME_PROFILE_PATH")
+    chrome_profile = os.getenv("CHROME_PROFILE_PATH", "/tmp/chrome-profile")
     username = get_env("OAKLAND_USERNAME")
     password = get_env("OAKLAND_PASSWORD")
 
@@ -305,13 +305,21 @@ async def run(start_date: str, end_date: str, headless: bool = False) -> dict:
         cur += timedelta(days=1)
 
     async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=chrome_profile,
-            channel="chrome",
-            headless=headless,
-            args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
-            no_viewport=True,
-        )
+        # On Linux servers use plain chromium (no persistent profile, no chrome channel)
+        if sys.platform == "win32":
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir=chrome_profile,
+                channel="chrome",
+                headless=headless,
+                args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
+                no_viewport=True,
+            )
+        else:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            context = await browser.new_context()
 
         page = context.pages[0] if context.pages else await context.new_page()
 
