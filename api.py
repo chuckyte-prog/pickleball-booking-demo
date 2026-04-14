@@ -65,6 +65,45 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/screenshot")
+async def screenshot():
+    """Return a screenshot of whatever the browser is currently looking at."""
+    from fastapi.responses import Response
+    session = get_session()
+    if session._page is None or session._page.is_closed():
+        raise HTTPException(status_code=503, detail="No active browser session")
+    img = await session._page.screenshot(full_page=True)
+    return Response(content=img, media_type="image/png")
+
+
+@app.get("/debug/{target_date}")
+async def debug(target_date: str):
+    """Jump to date and return raw DOM slot data for debugging."""
+    from court_agent import jump_to_date, scrape_calendar
+    session = get_session()
+    if session._page is None or session._page.is_closed():
+        raise HTTPException(status_code=503, detail="No active browser session")
+    await jump_to_date(session._page, target_date)
+    # Return raw evaluate results before merge
+    page = session._page
+    attrs = await page.evaluate("""
+    (targetDate) => {
+        const results = [];
+        document.querySelectorAll('[data-start][data-end]').forEach(el => {
+            const text = (el.innerText || el.textContent || '').trim();
+            if (text === 'Reserve') {
+                results.push({
+                    start: el.getAttribute('data-start'),
+                    end: el.getAttribute('data-end'),
+                });
+            }
+        });
+        return results;
+    }
+    """, target_date)
+    return {"date": target_date, "raw_slots": attrs}
+
+
 @app.post("/availability")
 async def availability(req: AvailabilityRequest):
     try:
