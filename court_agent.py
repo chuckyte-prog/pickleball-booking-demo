@@ -100,12 +100,13 @@ async def search_bushrod(page: Page, start_date: str, end_date: str) -> None:
     await page.press("#to", "Tab")
     await asyncio.sleep(random.uniform(0.5, 1.0))
     await page.click("button:has-text('Check Availability'), [role='button']:has-text('Check Availability')")
-    await page.wait_for_load_state("networkidle", timeout=15000)
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await asyncio.sleep(random.uniform(1.5, 2.5))
 
 
 async def select_bushrod_court_1(page: Page) -> None:
     # Find the row containing "Bushrod Tennis Court # 1" and click its Choose button
-    await page.wait_for_selector("text=Bushrod Tennis Court # 1", timeout=15000)
+    await page.wait_for_selector("text=Bushrod Tennis Court # 1", timeout=30000)
     await asyncio.sleep(random.uniform(0.8, 1.5))
 
     # The Choose button is in the same row — find the closest button
