@@ -17,6 +17,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -28,6 +29,13 @@ load_dotenv(_env_path)
 _agent_path = (Path(__file__).parent / "court_agent.py").resolve()
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://startuptosold.com", "https://www.startuptosold.com"],
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type"],
+)
 
 # One request at a time — Chrome is heavy
 _lock = asyncio.Lock()
