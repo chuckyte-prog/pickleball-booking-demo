@@ -477,14 +477,15 @@ class BrowserSession:
     async def _navigate_to_calendar(self) -> None:
         """Full navigation: login → Sports Rentals → Bushrod → calendar."""
         page = self._page
-        today = date.today().isoformat()
+        # Use tomorrow so the search always returns results (today may be past booking window)
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
 
         await page.goto(TARGET_URL, wait_until="networkidle", timeout=20000)
         if await page.query_selector("#textBoxUsername"):
             await login(page, self._username, self._password)
 
         await navigate_to_sports_rentals(page)
-        await search_bushrod(page, today, today)
+        await search_bushrod(page, tomorrow, tomorrow)
         await select_bushrod_court_1(page)
         self._on_calendar = True
 
