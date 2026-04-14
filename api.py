@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from court_agent import get_session, set_credentials, COURT_NAME
+from court_agent import get_session, set_credentials, jump_to_date, COURT_NAME
 
 # Load .env from this file's directory regardless of cwd
 _env_path = Path(__file__).parent / ".env"

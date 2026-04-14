@@ -147,31 +147,135 @@ async def jump_to_date(page: Page, target_date: str) -> None:
     """Use the Jump To Date calendar to navigate to the target date's week."""
     dt = datetime.strptime(target_date, "%Y-%m-%d")
 
+    # Close any open calendar popup first by pressing Escape
+    await page.keyboard.press("Escape")
+    await asyncio.sleep(0.3)
+
     # Click "Jump To Date" link
     await page.click("text=Jump To Date")
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.0)
 
     # Wait for the calendar popup to appear
-    await page.wait_for_selector(".k-calendar, .k-popup", timeout=10000)
+    await page.wait_for_selector(".k-calendar", timeout=10000)
+    await asyncio.sleep(0.5)
 
-    # Navigate to the correct month if needed
-    for _ in range(12):  # max 12 month navigations
-        # Check current month/year displayed
-        month_text = await page.locator(".k-nav-fast, .k-calendar-title, .k-title").first.inner_text()
-        displayed = datetime.strptime(month_text.strip(), "%B %Y") if month_text else None
-        if displayed and displayed.year == dt.year and displayed.month == dt.month:
+    # Dump calendar DOM to understand selectors (first call only for debugging)
+    cal_html = await page.evaluate("""
+    () => {
+        const cal = document.querySelector('.k-calendar');
+        return cal ? cal.outerHTML.substring(0, 2000) : 'not found';
+    }
+    """)
+    print(f"CALENDAR DOM: {cal_html}", flush=True)
+
+    # Navigate to the correct month using JS to read and click arrows reliably
+    for _ in range(24):  # max 24 month navigations (2 years)
+        # Read the current month/year from the calendar header via JS
+        month_text = await page.evaluate("""
+        () => {
+            const el = document.querySelector('.k-nav-fast, .k-calendar-title, .k-title, .k-header .k-link');
+            return el ? el.innerText.trim() : '';
+        }
+        """)
+
+        if not month_text:
             break
-        # Click next or prev arrow
-        if displayed and (displayed.year < dt.year or (displayed.year == dt.year and displayed.month < dt.month)):
-            await page.click(".k-nav-next, [aria-label='Next']")
-        else:
-            await page.click(".k-nav-prev, [aria-label='Previous']")
-        await asyncio.sleep(0.4)
 
-    # Click the target day number in the calendar
+        try:
+            displayed = datetime.strptime(month_text, "%B %Y")
+        except ValueError:
+            break
+
+        if displayed.year == dt.year and displayed.month == dt.month:
+            break
+
+        # Click next or prev arrow via JS
+        if displayed.year < dt.year or (displayed.year == dt.year and displayed.month < dt.month):
+            clicked = await page.evaluate("""
+            () => {
+                const btn = document.querySelector('a[data-action="next"]');
+                if (btn) { btn.click(); return true; }
+                return false;
+            }
+            """)
+        else:
+            clicked = await page.evaluate("""
+            () => {
+                const btn = document.querySelector('a[data-action="prev"]');
+                if (btn) { btn.click(); return true; }
+                return false;
+            }
+            """)
+        if not clicked:
+            raise RuntimeError(f"Could not find calendar navigation arrow. Current month: {month_text}")
+        await asyncio.sleep(0.5)
+
+    # Wait for the calendar to settle on the right month (Kendo re-renders async)
+    for _ in range(20):
+        month_text = await page.evaluate("""
+        () => {
+            const el = document.querySelector('.k-nav-fast, .k-calendar-title, .k-title, .k-header .k-link');
+            return el ? el.innerText.trim() : '';
+        }
+        """)
+        try:
+            displayed = datetime.strptime(month_text, "%B %Y")
+            if displayed.year == dt.year and displayed.month == dt.month:
+                break
+        except ValueError:
+            pass
+        await asyncio.sleep(0.2)
+    else:
+        raise RuntimeError(f"Calendar never settled on {dt.strftime('%B %Y')}, last saw: {month_text}")
+
+    await asyncio.sleep(0.4)  # let cells fully render
+
+    # Build the data-value Kendo uses: e.g. 2026/4/7
+    data_value = f"{dt.year}/{dt.month}/{dt.day}"
     day_str = str(dt.day)
-    # Find the td containing this day number that isn't greyed out
-    await page.locator(f".k-calendar td:not(.k-other-month) a:text-is('{day_str}'), .k-calendar td:not(.k-other-month) span:text-is('{day_str}')").first.click()
+
+    clicked_day = await page.evaluate(f"""
+    () => {{
+        // Strategy 1: Kendo data-value attribute on td
+        const byValue = document.querySelector('.k-calendar td[data-value="{data_value}"]');
+        if (byValue) {{
+            const link = byValue.querySelector('a') || byValue;
+            link.click();
+            return 'data-value';
+        }}
+
+        // Strategy 2: find <a> inside td whose text matches day number, not in other-month
+        const tds = Array.from(document.querySelectorAll('.k-calendar td'));
+        for (const td of tds) {{
+            if (td.classList.contains('k-other-month') || td.classList.contains('k-out-range-day')) continue;
+            const link = td.querySelector('a');
+            if (link && (link.innerText || link.textContent || '').trim() === '{day_str}') {{
+                link.click();
+                return 'link-text';
+            }}
+            // day number directly in td
+            if ((td.innerText || td.textContent || '').trim() === '{day_str}') {{
+                td.click();
+                return 'td-text';
+            }}
+        }}
+        return false;
+    }}
+    """)
+
+    if not clicked_day:
+        # Dump cells to stderr for diagnosis
+        cells = await page.evaluate("""
+        () => Array.from(document.querySelectorAll('.k-calendar td')).map(td => ({
+            cls: td.className,
+            dv: td.getAttribute('data-value'),
+            txt: (td.innerText || td.textContent || '').trim()
+        }))
+        """)
+        print(f"DAY CLICK FAILED. data-value={data_value} day_str={day_str}", file=sys.stderr)
+        print(f"Calendar cells: {cells}", file=sys.stderr)
+        raise RuntimeError(f"Could not find day {day_str} in calendar (data-value={data_value})")
+
     await asyncio.sleep(0.5)
 
     # Wait for calendar to update
@@ -357,25 +461,16 @@ class BrowserSession:
         if self._playwright is None:
             self._playwright = await async_playwright().start()
 
-        if sys.platform == "win32":
-            chrome_profile = os.getenv("CHROME_PROFILE_PATH", "/tmp/chrome-profile")
-            self._context = await self._playwright.chromium.launch_persistent_context(
-                user_data_dir=chrome_profile,
-                channel="chrome",
-                headless=False,
-                args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
-                no_viewport=True,
-            )
-            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        else:
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            self._context = await self._browser.new_context(
-                viewport={"width": 1280, "height": 900},
-            )
-            self._page = await self._context.new_page()
+        headless = sys.platform != "win32"
+        extra_args = ["--no-sandbox", "--disable-dev-shm-usage"] if not sys.platform == "win32" else []
+        self._browser = await self._playwright.chromium.launch(
+            headless=headless,
+            args=extra_args,
+        )
+        self._context = await self._browser.new_context(
+            viewport={"width": 1280, "height": 900},
+        )
+        self._page = await self._context.new_page()
 
         self._on_calendar = False
 
