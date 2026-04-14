@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Oakland Pickleball Court Availability</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --ink: #1c1c1e;
+      --white: #ffffff;
+      --off-white: #f5f5f7;
+      --orange: #e85d26;
+      --orange-dark: #c44a1a;
+      --blue: #2b5ea7;
+      --blue-dark: #1e4480;
+      --blue-light: #e8eef8;
+      --muted: #4a4a4f;
+      --rule: #dcdce0;
+      --dark-bg: #111827;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: var(--off-white);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 56px 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .card {
+      background: var(--white);
+      border: 1px solid var(--rule);
+      border-top: 4px solid var(--orange);
+      padding: 40px 44px;
+      width: 100%;
+      max-width: 520px;
+    }
+
+    .eyebrow {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--blue);
+      background: var(--blue-light);
+      display: inline-block;
+      padding: 0.35rem 0.85rem;
+      margin-bottom: 1.25rem;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.6rem;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.65;
+      margin-bottom: 2rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    input[type="date"] {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1px solid var(--rule);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--ink);
+      margin-bottom: 16px;
+      outline: none;
+      transition: border-color 0.15s;
+      background: var(--white);
+    }
+
+    input[type="date"]:focus { border-color: var(--blue); }
+
+    button {
+      width: 100%;
+      padding: 0.9rem 2rem;
+      background: var(--orange);
+      color: #fff;
+      border: 2px solid var(--orange);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--orange-dark);
+      border-color: var(--orange-dark);
+    }
+
+    button:disabled { background: #bbb; border-color: #bbb; cursor: not-allowed; }
+
+    .spinner {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .spinner.visible { display: flex; }
+
+    .spinner-ring {
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--rule);
+      border-top-color: var(--orange);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .results { display: none; margin-top: 28px; }
+    .results.visible { display: block; }
+
+    .results-date {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .slot {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 14px;
+      background: var(--blue-light);
+      border: 1px solid #c5d8f0;
+      border-left: 4px solid var(--blue);
+      margin-bottom: 8px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    .no-slots {
+      padding: 16px;
+      background: var(--off-white);
+      border: 1px solid var(--rule);
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+
+    .error {
+      display: none;
+      margin-top: 20px;
+      padding: 14px 16px;
+      background: #fff3f0;
+      border: 1px solid #f5c6b0;
+      border-left: 4px solid var(--orange);
+      color: var(--orange-dark);
+      font-size: 0.88rem;
+      font-weight: 500;
+    }
+
+    .error.visible { display: block; }
+
+    .court-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--rule);
+      text-align: center;
+    }
+
+    @media (max-width: 560px) {
+      .card { padding: 28px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="eyebrow">Live Demo &middot; AI Automation</div>
+    <h1>Pickleball Court Availability</h1>
+    <p class="subtitle">
+      Pick a date and see what's open at Bushrod Tennis Court in Oakland.
+      This tool scrapes the city's reservation portal in real time.
+    </p>
+
+    <label for="date">Select a date</label>
+    <input type="date" id="date" />
+
+    <button id="check-btn" onclick="checkAvailability()">Check Availability</button>
+
+    <div class="spinner" id="spinner">
+      <div class="spinner-ring"></div>
+      <span>Checking availability... (~30 seconds)</span>
+    </div>
+
+    <div class="error" id="error"></div>
+
+    <div class="results" id="results">
+      <div class="results-date" id="results-date"></div>
+      <div id="slots-list"></div>
+    </div>
+
+    <p class="court-label">Bushrod Tennis Court #1 &mdash; Oakland, CA</p>
+  </div>
+
+  <script>
+    (function () {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      document.getElementById("date").value = tomorrow.toISOString().slice(0, 10);
+    })();
+
+    function fmt12(time24) {
+      const [h, m] = time24.split(":").map(Number);
+      const period = h >= 12 ? "PM" : "AM";
+      const hour = h % 12 || 12;
+      return `${hour}:${String(m).padStart(2, "0")} ${period}`;
+    }
+
+    function formatDate(dateStr) {
+      const [y, mo, d] = dateStr.split("-").map(Number);
+      const dt = new Date(y, mo - 1, d);
+      return dt.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+    }
+
+    async function checkAvailability() {
+      const dateVal = document.getElementById("date").value;
+      if (!dateVal) return;
+
+      const btn = document.getElementById("check-btn");
+      const spinner = document.getElementById("spinner");
+      const results = document.getElementById("results");
+      const error = document.getElementById("error");
+
+      btn.disabled = true;
+      spinner.classList.add("visible");
+      results.classList.remove("visible");
+      error.classList.remove("visible");
+
+      try {
+        const res = await fetch("/availability", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date: dateVal }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.detail || "Something went wrong.");
+        }
+
+        const day = data.days && data.days[0];
+        const slots = day ? day.available_slots : [];
+
+        document.getElementById("results-date").textContent = formatDate(dateVal);
+
+        const list = document.getElementById("slots-list");
+        list.innerHTML = "";
+
+        if (slots.length === 0) {
+          list.innerHTML = '<div class="no-slots">No available slots found for this date.</div>';
+        } else {
+          slots.forEach(slot => {
+            const div = document.createElement("div");
+            div.className = "slot";
+            div.innerHTML = `<span>${fmt12(slot.start)} &ndash; ${fmt12(slot.end)}</span>`;
+            list.appendChild(div);
+          });
+        }
+
+        results.classList.add("visible");
+      } catch (err) {
+        error.textContent = err.message || "Unable to check availability. Please try again.";
+        error.classList.add("visible");
+      } finally {
+        btn.disabled = false;
+        spinner.classList.remove("visible");
+      }
+    }
+  </script>
+</body>
+</html>
