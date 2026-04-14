@@ -79,12 +79,10 @@ async def screenshot():
 @app.get("/debug/{target_date}")
 async def debug(target_date: str):
     """Jump to date and return raw DOM slot data for debugging."""
-    from court_agent import jump_to_date, scrape_calendar
     session = get_session()
     if session._page is None or session._page.is_closed():
         raise HTTPException(status_code=503, detail="No active browser session")
     await jump_to_date(session._page, target_date)
-    # Return raw evaluate results before merge
     page = session._page
     attrs = await page.evaluate("""
     (targetDate) => {
@@ -101,7 +99,10 @@ async def debug(target_date: str):
         return results;
     }
     """, target_date)
-    return {"date": target_date, "raw_slots": attrs}
+    # Also grab page title and URL so we know where we are
+    url = page.url
+    title = await page.title()
+    return {"date": target_date, "url": url, "title": title, "raw_slots": attrs}
 
 
 @app.post("/availability")

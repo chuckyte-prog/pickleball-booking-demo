@@ -108,16 +108,35 @@ async def select_bushrod_court_1(page: Page) -> None:
     await page.wait_for_selector("text=Bushrod Tennis Court # 1", timeout=30000)
     await asyncio.sleep(random.uniform(0.8, 1.5))
 
-    court_row = page.locator("text=Bushrod Tennis Court 1").locator("xpath=ancestor::tr | ancestor::div[contains(@class,'row')] | ancestor::li").first
-    choose_btn = court_row.locator("button:has-text('Choose'), a:has-text('Choose'), [role='button']:has-text('Choose')")
+    # Find the Choose button in the same row/container as "Bushrod Tennis Court # 1"
+    # Use evaluate to find the exact element and its sibling/nearby Choose button
+    chosen = await page.evaluate("""
+    () => {
+        // Find all elements containing the exact court name
+        const allEls = Array.from(document.querySelectorAll('*'));
+        const courtEl = allEls.find(el =>
+            el.children.length === 0 &&
+            (el.innerText || el.textContent || '').trim() === 'Bushrod Tennis Court # 1'
+        );
+        if (!courtEl) return false;
 
-    if await choose_btn.count() == 0:
-        all_choose = page.locator("button:has-text('Choose'), a:has-text('Choose')")
-        count = await all_choose.count()
-        if count > 0:
-            await all_choose.first.click()
-    else:
-        await choose_btn.first.click()
+        // Walk up to find a row/container that also has a Choose button
+        let ancestor = courtEl.parentElement;
+        for (let i = 0; i < 10; i++) {
+            if (!ancestor) break;
+            const btn = ancestor.querySelector('button, a, [role="button"]');
+            if (btn && (btn.innerText || btn.textContent || '').trim() === 'Choose') {
+                btn.click();
+                return true;
+            }
+            ancestor = ancestor.parentElement;
+        }
+        return false;
+    }
+    """)
+
+    if not chosen:
+        raise RuntimeError("Could not find Choose button for Bushrod Tennis Court # 1")
 
     await page.wait_for_load_state("networkidle", timeout=15000)
     await page.wait_for_selector(".k-scheduler, .k-scheduler-content", timeout=15000)
