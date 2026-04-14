@@ -17,9 +17,10 @@ import random
 import re
 import sys
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from dotenv import load_dotenv
-from playwright.async_api import async_playwright, Page
+from playwright.async_api import async_playwright, Page, BrowserContext
 
 load_dotenv()
 
@@ -89,7 +90,6 @@ async def search_bushrod(page: Page, start_date: str, end_date: str) -> None:
     start_fmt = fmt(start_date)
     end_fmt = fmt(end_date)
 
-    # #from = start date picker, #to = end date picker (both visible k-input fields)
     await asyncio.sleep(random.uniform(0.5, 1.0))
     await page.click("#from")
     await page.fill("#from", start_fmt)
@@ -105,28 +105,59 @@ async def search_bushrod(page: Page, start_date: str, end_date: str) -> None:
 
 
 async def select_bushrod_court_1(page: Page) -> None:
-    # Find the row containing "Bushrod Tennis Court # 1" and click its Choose button
     await page.wait_for_selector("text=Bushrod Tennis Court # 1", timeout=30000)
     await asyncio.sleep(random.uniform(0.8, 1.5))
 
-    # The Choose button is in the same row — find the closest button
     court_row = page.locator("text=Bushrod Tennis Court 1").locator("xpath=ancestor::tr | ancestor::div[contains(@class,'row')] | ancestor::li").first
     choose_btn = court_row.locator("button:has-text('Choose'), a:has-text('Choose'), [role='button']:has-text('Choose')")
 
     if await choose_btn.count() == 0:
-        # Fallback: find Choose button near the text
         all_choose = page.locator("button:has-text('Choose'), a:has-text('Choose')")
         count = await all_choose.count()
-        # Click the first one (Bushrod Tennis Court 1 is first result)
         if count > 0:
             await all_choose.first.click()
     else:
         await choose_btn.first.click()
 
     await page.wait_for_load_state("networkidle", timeout=15000)
-    # Wait for calendar grid
     await page.wait_for_selector(".k-scheduler, .k-scheduler-content", timeout=15000)
-    await asyncio.sleep(2)  # let JS finish rendering slots
+    await asyncio.sleep(2)
+
+
+async def jump_to_date(page: Page, target_date: str) -> None:
+    """Use the Jump To Date calendar to navigate to the target date's week."""
+    dt = datetime.strptime(target_date, "%Y-%m-%d")
+
+    # Click "Jump To Date" link
+    await page.click("text=Jump To Date")
+    await asyncio.sleep(0.5)
+
+    # Wait for the calendar popup to appear
+    await page.wait_for_selector(".k-calendar, .k-popup", timeout=10000)
+
+    # Navigate to the correct month if needed
+    for _ in range(12):  # max 12 month navigations
+        # Check current month/year displayed
+        month_text = await page.locator(".k-nav-fast, .k-calendar-title, .k-title").first.inner_text()
+        displayed = datetime.strptime(month_text.strip(), "%B %Y") if month_text else None
+        if displayed and displayed.year == dt.year and displayed.month == dt.month:
+            break
+        # Click next or prev arrow
+        if displayed and (displayed.year < dt.year or (displayed.year == dt.year and displayed.month < dt.month)):
+            await page.click(".k-nav-next, [aria-label='Next']")
+        else:
+            await page.click(".k-nav-prev, [aria-label='Previous']")
+        await asyncio.sleep(0.4)
+
+    # Click the target day number in the calendar
+    day_str = str(dt.day)
+    # Find the td containing this day number that isn't greyed out
+    await page.locator(f".k-calendar td:not(.k-other-month) a:text-is('{day_str}'), .k-calendar td:not(.k-other-month) span:text-is('{day_str}')").first.click()
+    await asyncio.sleep(0.5)
+
+    # Wait for calendar to update
+    await page.wait_for_load_state("networkidle", timeout=15000)
+    await asyncio.sleep(1.5)
 
 
 async def scrape_calendar(page: Page, target_date: str) -> list:
@@ -165,8 +196,6 @@ async def scrape_calendar(page: Page, target_date: str) -> list:
     slots_from_title = await page.evaluate("""
     (targetDate) => {
         const results = [];
-        // Only collect from elements whose title contains a time range,
-        // and filter to the target date column by x-position if possible.
         const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
         const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
         const dt = new Date(targetDate + 'T12:00:00');
@@ -217,10 +246,9 @@ async def scrape_calendar(page: Page, target_date: str) -> list:
         if slots:
             return merge_slots(slots)
 
-    # Strategy 3: x/y position mapping (same approach the LLM was doing)
+    # Strategy 3: x/y position mapping
     positional = await page.evaluate("""
     (targetDateStr) => {
-        // Find column headers to identify the target date column
         const targetDt = new Date(targetDateStr + 'T12:00:00');
         const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
         const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -238,7 +266,6 @@ async def scrape_calendar(page: Page, target_date: str) -> list:
             }
         });
 
-        // Find time row labels
         const timeRows = [];
         document.querySelectorAll('.k-scheduler-times tr, .k-time-cell').forEach(el => {
             const text = (el.innerText || '').trim();
@@ -248,11 +275,9 @@ async def scrape_calendar(page: Page, target_date: str) -> list:
             }
         });
 
-        // Find Reserve elements in the target column — deduplicate by y position
         const seen = new Set();
         const slots = [];
         document.querySelectorAll('a, div, span').forEach(el => {
-            // Only leaf-level elements (no Reserve children)
             if (el.querySelector('a, div, span')) return;
             const text = (el.innerText || el.textContent || '').trim();
             if (text === 'Reserve') {
@@ -291,27 +316,147 @@ async def scrape_calendar(page: Page, target_date: str) -> list:
     return []
 
 
-async def run(start_date: str, end_date: str, headless: bool = False) -> dict:
+# ── Persistent browser session ──────────────────────────────────────────────
+
+class BrowserSession:
+    """Keeps a single browser + logged-in page alive across requests.
+    Automatically recovers from errors by re-launching and re-logging in.
+    """
+
+    def __init__(self):
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._page: Page | None = None
+        self._on_calendar = False  # True once we've reached the Bushrod calendar
+        self._lock = asyncio.Lock()
+        self._username = None
+        self._password = None
+
+    async def _launch(self) -> None:
+        """Launch browser and log in."""
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+
+        if sys.platform == "win32":
+            chrome_profile = os.getenv("CHROME_PROFILE_PATH", "/tmp/chrome-profile")
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=chrome_profile,
+                channel="chrome",
+                headless=False,
+                args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
+                no_viewport=True,
+            )
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        else:
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            self._context = await self._browser.new_context(
+                viewport={"width": 1280, "height": 900},
+            )
+            self._page = await self._context.new_page()
+
+        self._on_calendar = False
+
+    async def _navigate_to_calendar(self) -> None:
+        """Full navigation: login → Sports Rentals → Bushrod → calendar."""
+        page = self._page
+        today = date.today().isoformat()
+
+        await page.goto(TARGET_URL, wait_until="networkidle", timeout=20000)
+        if await page.query_selector("#textBoxUsername"):
+            await login(page, self._username, self._password)
+
+        await navigate_to_sports_rentals(page)
+        await search_bushrod(page, today, today)
+        await select_bushrod_court_1(page)
+        self._on_calendar = True
+
+    async def _ensure_calendar(self) -> None:
+        """Make sure we're on the calendar page, launching/navigating if needed."""
+        if self._page is None or self._page.is_closed():
+            await self._launch()
+            await self._navigate_to_calendar()
+            return
+
+        if not self._on_calendar:
+            await self._navigate_to_calendar()
+
+    async def get_slots(self, target_date: str) -> list:
+        """Get available slots for target_date, with auto-recovery on failure."""
+        async with self._lock:
+            for attempt in range(3):
+                try:
+                    await self._ensure_calendar()
+                    await jump_to_date(self._page, target_date)
+                    slots = await scrape_calendar(self._page, target_date)
+                    return slots
+                except Exception as e:
+                    print(f"Attempt {attempt + 1} failed: {e}", file=sys.stderr)
+                    self._on_calendar = False
+                    if attempt < 2:
+                        print("Recovering: re-launching browser...", file=sys.stderr)
+                        await self._close_browser()
+                        await asyncio.sleep(2)
+                        await self._launch()
+            raise RuntimeError("Failed to get slots after 3 attempts")
+
+    async def _close_browser(self) -> None:
+        try:
+            if self._context:
+                await self._context.close()
+        except Exception:
+            pass
+        try:
+            if self._browser:
+                await self._browser.close()
+        except Exception:
+            pass
+        self._context = None
+        self._browser = None
+        self._page = None
+        self._on_calendar = False
+
+    async def close(self) -> None:
+        await self._close_browser()
+        if self._playwright:
+            await self._playwright.stop()
+            self._playwright = None
+
+
+# Singleton used by api.py
+_session: BrowserSession | None = None
+
+
+def get_session() -> BrowserSession:
+    global _session
+    if _session is None:
+        _session = BrowserSession()
+    return _session
+
+
+def set_credentials(username: str, password: str) -> None:
+    sess = get_session()
+    sess._username = username
+    sess._password = password
+
+
+# ── Standalone CLI ───────────────────────────────────────────────────────────
+
+async def run_once(target_date: str) -> dict:
+    """Used by the CLI to run a single scrape and exit."""
     chrome_profile = os.getenv("CHROME_PROFILE_PATH", "/tmp/chrome-profile")
     username = get_env("OAKLAND_USERNAME")
     password = get_env("OAKLAND_PASSWORD")
 
-    # Build list of dates in range
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-    dates = []
-    cur = start_dt
-    while cur <= end_dt:
-        dates.append(cur.strftime("%Y-%m-%d"))
-        cur += timedelta(days=1)
-
     async with async_playwright() as p:
-        # On Linux servers use plain chromium (no persistent profile, no chrome channel)
         if sys.platform == "win32":
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=chrome_profile,
                 channel="chrome",
-                headless=headless,
+                headless=False,
                 args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
                 no_viewport=True,
             )
@@ -320,51 +465,39 @@ async def run(start_date: str, end_date: str, headless: bool = False) -> dict:
                 headless=True,
                 args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
-            context = await browser.new_context()
+            context = await browser.new_context(viewport={"width": 1280, "height": 900})
 
         page = context.pages[0] if context.pages else await context.new_page()
 
         try:
+            today = date.today().isoformat()
             await page.goto(TARGET_URL, wait_until="networkidle", timeout=20000)
-
             if await page.query_selector("#textBoxUsername"):
                 await login(page, username, password)
-
             await navigate_to_sports_rentals(page)
-            # Search with the full date range so the calendar shows all days at once
-            await search_bushrod(page, start_date, end_date)
+            await search_bushrod(page, today, today)
             await select_bushrod_court_1(page)
-
-            # Scrape each requested date from the same calendar view
-            court_days = []
-            for d in dates:
-                slots = await scrape_calendar(page, d)
-                court_days.append({"date": d, "available_slots": slots})
-
+            await jump_to_date(page, target_date)
+            slots = await scrape_calendar(page, target_date)
         finally:
             await context.close()
 
-    data = {
+    return {
         "city": "Oakland",
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": target_date,
+        "end_date": target_date,
         "scraped_at": datetime.now().isoformat(),
         "court_name": COURT_NAME,
-        "days": court_days,
+        "days": [{"date": target_date, "available_slots": slots}],
         "dry_run": True,
     }
 
-    return data
-
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3:
-        start, end = sys.argv[1], sys.argv[2]
-    elif len(sys.argv) == 2:
-        start = end = sys.argv[1]
+    if len(sys.argv) >= 2:
+        target = sys.argv[1]
     else:
-        tomorrow = date.today() + timedelta(days=1)
-        start = end = tomorrow.isoformat()
+        target = (date.today() + timedelta(days=1)).isoformat()
 
-    data = asyncio.run(run(start, end))
+    data = asyncio.run(run_once(target))
     print(json.dumps(data, indent=2))
