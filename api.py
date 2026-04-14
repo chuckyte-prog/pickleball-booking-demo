@@ -73,7 +73,7 @@ async def availability(req: AvailabilityRequest):
                 raise HTTPException(status_code=504, detail="Scrape timed out. Please try again.")
 
             if proc.returncode != 0:
-                err = stderr.decode()[:500] or f"exit code {proc.returncode}, stdout: {stdout.decode()[:200]}"
+                err = stderr.decode()[:2000] or f"exit code {proc.returncode}, stdout: {stdout.decode()[:500]}"
                 raise HTTPException(status_code=500, detail=f"Scrape failed: {err}")
 
             data = json.loads(stdout.decode())
