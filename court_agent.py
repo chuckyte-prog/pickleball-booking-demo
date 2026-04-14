@@ -173,7 +173,9 @@ async def jump_to_date(page: Page, target_date: str) -> None:
         # Read the current month/year from the calendar header via JS
         month_text = await page.evaluate("""
         () => {
-            const el = document.querySelector('.k-nav-fast, .k-calendar-title, .k-title, .k-header .k-link');
+            const cal = document.querySelector('.k-calendar');
+            if (!cal) return '';
+            const el = cal.querySelector('.k-nav-fast, .k-calendar-title, .k-title');
             return el ? el.innerText.trim() : '';
         }
         """)
@@ -193,7 +195,8 @@ async def jump_to_date(page: Page, target_date: str) -> None:
         if displayed.year < dt.year or (displayed.year == dt.year and displayed.month < dt.month):
             clicked = await page.evaluate("""
             () => {
-                const btn = document.querySelector('a[data-action="next"]');
+                const cal = document.querySelector('.k-calendar');
+                const btn = cal && cal.querySelector('a[data-action="next"]');
                 if (btn) { btn.click(); return true; }
                 return false;
             }
@@ -201,7 +204,8 @@ async def jump_to_date(page: Page, target_date: str) -> None:
         else:
             clicked = await page.evaluate("""
             () => {
-                const btn = document.querySelector('a[data-action="prev"]');
+                const cal = document.querySelector('.k-calendar');
+                const btn = cal && cal.querySelector('a[data-action="prev"]');
                 if (btn) { btn.click(); return true; }
                 return false;
             }
@@ -214,7 +218,9 @@ async def jump_to_date(page: Page, target_date: str) -> None:
     for _ in range(20):
         month_text = await page.evaluate("""
         () => {
-            const el = document.querySelector('.k-nav-fast, .k-calendar-title, .k-title, .k-header .k-link');
+            const cal = document.querySelector('.k-calendar');
+            if (!cal) return '';
+            const el = cal.querySelector('.k-nav-fast, .k-calendar-title, .k-title');
             return el ? el.innerText.trim() : '';
         }
         """)
