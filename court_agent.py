@@ -3,37 +3,39 @@ Oakland Pickleball Court Availability Agent
 Scrapes available slots from PerfectMind using pure Playwright — no LLM.
 Dry-run only: finds Reserve buttons but does NOT click them.
 
+Uses the public BookMe4 widget — no login required.
+
 Setup:
-  1. Copy .env.example to .env and fill in your values
-  2. pip install -r requirements.txt
-  3. playwright install chrome
-  4. python court_agent.py [YYYY-MM-DD]  (defaults to tomorrow)
+  1. pip install -r requirements.txt
+  2. playwright install chromium
+  3. python court_agent.py [YYYY-MM-DD]  (defaults to tomorrow)
 """
 
 import asyncio
 import json
-import os
-import random
 import re
 import sys
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
-from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page, BrowserContext
 
-load_dotenv()
-
-TARGET_URL = "https://cityofoakland.perfectmind.com/"
+# Public BookMe4 widget URL — no login required
+FACILITY_ID = "6c5367b9-a180-46af-beff-fef0a898a533"
+WIDGET_ID = "ef709cfd-55bf-4afc-b375-1be4775ff667"
+CALENDAR_ID = "e4facb93-38df-44e3-8e2e-db4778408327"
+BASE_URL = "https://cityofoakland.perfectmind.com/23603/Reports/BookMe4LandingPages/Facility"
 COURT_NAME = "Bushrod Tennis Court # 1"
 
 
-def get_env(key: str) -> str:
-    val = os.getenv(key)
-    if not val:
-        print(f"ERROR: {key} not set in .env", file=sys.stderr)
-        sys.exit(1)
-    return val
+def build_public_url(target_date: str) -> str:
+    """Build the direct public URL for the Bushrod court calendar."""
+    return (
+        f"{BASE_URL}"
+        f"?facilityId={FACILITY_ID}"
+        f"&widgetId={WIDGET_ID}"
+        f"&calendarId={CALENDAR_ID}"
+        f"&arrivalDate={target_date}T12:00:00.000Z"
+    )
 
 
 def merge_slots(slots: list) -> list:
@@ -59,88 +61,6 @@ def to_24h(time_str: str) -> str:
         except ValueError:
             continue
     return time_str
-
-
-async def login(page: Page, username: str, password: str) -> None:
-    await page.wait_for_selector("#textBoxUsername", timeout=10000)
-    await page.fill("#textBoxUsername", username)
-    await page.fill("#textBoxPassword", password)
-    await page.click("#buttonLogin")
-    await page.wait_for_load_state("networkidle", timeout=15000)
-
-
-async def navigate_to_sports_rentals(page: Page) -> None:
-    await asyncio.sleep(random.uniform(0.8, 1.5))
-    await page.click("a:has-text('Facility Reservation')")
-    await page.wait_for_load_state("networkidle", timeout=10000)
-
-    await asyncio.sleep(random.uniform(0.8, 1.5))
-    await page.click("a:has-text('Sports Rentals')")
-    await page.wait_for_load_state("networkidle", timeout=10000)
-
-
-async def search_bushrod(page: Page, start_date: str, end_date: str) -> None:
-    await page.wait_for_selector("#facilityFilter\\.KeyWord", timeout=10000)
-    await page.fill("#facilityFilter\\.KeyWord", "Bushrod")
-
-    def fmt(d: str) -> str:
-        dt = datetime.strptime(d, "%Y-%m-%d")
-        return dt.strftime("%#m/%#d/%Y") if sys.platform == "win32" else dt.strftime("%-m/%-d/%Y")
-
-    start_fmt = fmt(start_date)
-    end_fmt = fmt(end_date)
-
-    await asyncio.sleep(random.uniform(0.5, 1.0))
-    await page.click("#from")
-    await page.fill("#from", start_fmt)
-    await page.press("#from", "Tab")
-    await asyncio.sleep(random.uniform(0.5, 1.0))
-    await page.click("#to")
-    await page.fill("#to", end_fmt)
-    await page.press("#to", "Tab")
-    await asyncio.sleep(random.uniform(0.5, 1.0))
-    await page.click("button:has-text('Check Availability'), [role='button']:has-text('Check Availability')")
-    await page.wait_for_load_state("networkidle", timeout=30000)
-    await asyncio.sleep(random.uniform(1.5, 2.5))
-
-
-async def select_bushrod_court_1(page: Page) -> None:
-    await page.wait_for_selector("text=Bushrod Tennis Court # 1", timeout=30000)
-    await asyncio.sleep(random.uniform(0.8, 1.5))
-
-    # Find the Choose button in the same row/container as "Bushrod Tennis Court # 1"
-    # Use evaluate to find the exact element and its sibling/nearby Choose button
-    chosen = await page.evaluate("""
-    () => {
-        // Find all elements containing the exact court name
-        const allEls = Array.from(document.querySelectorAll('*'));
-        const courtEl = allEls.find(el =>
-            el.children.length === 0 &&
-            (el.innerText || el.textContent || '').trim() === 'Bushrod Tennis Court # 1'
-        );
-        if (!courtEl) return false;
-
-        // Walk up to find a row/container that also has a Choose button
-        let ancestor = courtEl.parentElement;
-        for (let i = 0; i < 10; i++) {
-            if (!ancestor) break;
-            const btn = ancestor.querySelector('button, a, [role="button"]');
-            if (btn && (btn.innerText || btn.textContent || '').trim() === 'Choose') {
-                btn.click();
-                return true;
-            }
-            ancestor = ancestor.parentElement;
-        }
-        return false;
-    }
-    """)
-
-    if not chosen:
-        raise RuntimeError("Could not find Choose button for Bushrod Tennis Court # 1")
-
-    await page.wait_for_load_state("networkidle", timeout=15000)
-    await page.wait_for_selector(".k-scheduler, .k-scheduler-content", timeout=15000)
-    await asyncio.sleep(2)
 
 
 async def jump_to_date(page: Page, target_date: str) -> None:
@@ -448,8 +368,9 @@ async def scrape_calendar(page: Page, target_date: str) -> list:
 # ── Persistent browser session ──────────────────────────────────────────────
 
 class BrowserSession:
-    """Keeps a single browser + logged-in page alive across requests.
-    Automatically recovers from errors by re-launching and re-logging in.
+    """Keeps a single browser + page alive across requests.
+    Uses the public BookMe4 widget — no login required.
+    Automatically recovers from errors by re-launching.
     """
 
     def __init__(self):
@@ -457,18 +378,16 @@ class BrowserSession:
         self._browser = None
         self._context = None
         self._page: Page | None = None
-        self._on_calendar = False  # True once we've reached the Bushrod calendar
+        self._on_calendar = False
         self._lock = asyncio.Lock()
-        self._username = None
-        self._password = None
 
     async def _launch(self) -> None:
-        """Launch browser and log in."""
+        """Launch browser."""
         if self._playwright is None:
             self._playwright = await async_playwright().start()
 
         headless = sys.platform != "win32"
-        extra_args = ["--no-sandbox", "--disable-dev-shm-usage"] if not sys.platform == "win32" else []
+        extra_args = ["--no-sandbox", "--disable-dev-shm-usage"] if sys.platform != "win32" else []
         self._browser = await self._playwright.chromium.launch(
             headless=headless,
             args=extra_args,
@@ -481,19 +400,31 @@ class BrowserSession:
         self._on_calendar = False
 
     async def _navigate_to_calendar(self) -> None:
-        """Full navigation: login → Sports Rentals → Bushrod → calendar."""
+        """Navigate directly to the public Bushrod court calendar."""
         page = self._page
-        # Use tomorrow so the search always returns results (today may be past booking window)
         tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        url = build_public_url(tomorrow)
 
-        await page.goto(TARGET_URL, wait_until="networkidle", timeout=20000)
-        if await page.query_selector("#textBoxUsername"):
-            await login(page, self._username, self._password)
+        await page.goto(url, wait_until="networkidle", timeout=30000)
 
-        await navigate_to_sports_rentals(page)
-        await search_bushrod(page, tomorrow, tomorrow)
-        await select_bushrod_court_1(page)
+        # Verify the page loaded correctly — check for the scheduler grid
+        scheduler = await page.query_selector(".k-scheduler, .k-scheduler-content")
+        if not scheduler:
+            # Check if we got redirected to a login page
+            if await page.query_selector("#textBoxUsername"):
+                raise RuntimeError(
+                    "PUBLIC_URL_REQUIRES_LOGIN: The public BookMe4 URL is now "
+                    "requiring authentication. The URL or widget IDs may have "
+                    "changed. Check the PerfectMind portal manually."
+                )
+            raise RuntimeError(
+                "PUBLIC_URL_BROKEN: The public BookMe4 URL did not load the "
+                "scheduler grid. The facility/widget/calendar IDs may have "
+                "changed. Check the PerfectMind portal manually."
+            )
+
         self._on_calendar = True
+        print("Navigated to public calendar successfully", flush=True)
 
     async def _ensure_calendar(self) -> None:
         """Make sure we're on the calendar page, launching/navigating if needed."""
@@ -558,50 +489,36 @@ def get_session() -> BrowserSession:
     return _session
 
 
-def set_credentials(username: str, password: str) -> None:
-    sess = get_session()
-    sess._username = username
-    sess._password = password
-
-
 # ── Standalone CLI ───────────────────────────────────────────────────────────
 
 async def run_once(target_date: str) -> dict:
     """Used by the CLI to run a single scrape and exit."""
-    chrome_profile = os.getenv("CHROME_PROFILE_PATH", "/tmp/chrome-profile")
-    username = get_env("OAKLAND_USERNAME")
-    password = get_env("OAKLAND_PASSWORD")
-
     async with async_playwright() as p:
         if sys.platform == "win32":
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir=chrome_profile,
-                channel="chrome",
-                headless=False,
-                args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
-                no_viewport=True,
-            )
+            browser = await p.chromium.launch(headless=False)
         else:
             browser = await p.chromium.launch(
                 headless=True,
                 args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
-            context = await browser.new_context(viewport={"width": 1280, "height": 900})
-
-        page = context.pages[0] if context.pages else await context.new_page()
+        context = await browser.new_context(viewport={"width": 1280, "height": 900})
+        page = await context.new_page()
 
         try:
-            today = date.today().isoformat()
-            await page.goto(TARGET_URL, wait_until="networkidle", timeout=20000)
-            if await page.query_selector("#textBoxUsername"):
-                await login(page, username, password)
-            await navigate_to_sports_rentals(page)
-            await search_bushrod(page, today, today)
-            await select_bushrod_court_1(page)
-            await jump_to_date(page, target_date)
+            url = build_public_url(target_date)
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+
+            # Verify page loaded
+            scheduler = await page.query_selector(".k-scheduler, .k-scheduler-content")
+            if not scheduler:
+                if await page.query_selector("#textBoxUsername"):
+                    raise RuntimeError("Public URL now requires login -- IDs may have changed")
+                raise RuntimeError("Scheduler grid not found -- public URL may be broken")
+
             slots = await scrape_calendar(page, target_date)
         finally:
             await context.close()
+            await browser.close()
 
     return {
         "city": "Oakland",
@@ -610,7 +527,6 @@ async def run_once(target_date: str) -> dict:
         "scraped_at": datetime.now().isoformat(),
         "court_name": COURT_NAME,
         "days": [{"date": target_date, "available_slots": slots}],
-        "dry_run": True,
     }
 
 

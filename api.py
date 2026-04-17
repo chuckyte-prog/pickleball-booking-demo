@@ -7,22 +7,16 @@ Usage:
   uvicorn api:app --host 0.0.0.0 --port 8000  # production
 """
 
-import os
 from datetime import date, timedelta, datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from court_agent import get_session, set_credentials, jump_to_date, COURT_NAME
-
-# Load .env from this file's directory regardless of cwd
-_env_path = Path(__file__).parent / ".env"
-load_dotenv(_env_path)
+from court_agent import get_session, jump_to_date, COURT_NAME
 
 app = FastAPI()
 
@@ -36,12 +30,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    username = os.getenv("OAKLAND_USERNAME")
-    password = os.getenv("OAKLAND_PASSWORD")
-    if not username or not password:
-        raise RuntimeError("OAKLAND_USERNAME and OAKLAND_PASSWORD must be set")
-    set_credentials(username, password)
-    # Warm up: navigate to the calendar now so the first request is fast
+    # Warm up: navigate to the public calendar so the first request is fast
     session = get_session()
     try:
         await session._ensure_calendar()
@@ -131,7 +120,6 @@ async def availability(req: AvailabilityRequest):
         "scraped_at": datetime.now().isoformat(),
         "court_name": COURT_NAME,
         "days": [{"date": req.date, "available_slots": slots}],
-        "dry_run": True,
     }
 
     return JSONResponse(content=data)
