@@ -365,13 +365,11 @@
       const msg = document.getElementById("progress-msg");
       const steps = [
         { at: 0,  pct: 0,  label: "Connecting to reservation portal..." },
-        { at: 1,  pct: 8,  label: "Logging in..." },
-        { at: 4,  pct: 22, label: "Navigating to Sports Rentals..." },
-        { at: 8,  pct: 38, label: "Searching Bushrod courts..." },
-        { at: 13, pct: 55, label: "Loading court calendar..." },
-        { at: 18, pct: 70, label: "Reading available slots..." },
-        { at: 23, pct: 85, label: "Almost done..." },
-        { at: 28, pct: 95, label: "Finishing up..." },
+        { at: 1,  pct: 20, label: "Loading court calendar..." },
+        { at: 3,  pct: 50, label: "Jumping to selected date..." },
+        { at: 5,  pct: 75, label: "Reading available slots..." },
+        { at: 8,  pct: 90, label: "Almost done..." },
+        { at: 15, pct: 95, label: "Server is busy, hang tight..." },
       ];
       const start = Date.now();
       _progressTimer = setInterval(() => {
@@ -409,12 +407,17 @@
       error.classList.remove("visible");
       startProgress();
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
+
       try {
         const res = await fetch("/availability", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ date: dateVal }),
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
         const data = await res.json();
 
@@ -444,8 +447,13 @@
         stopProgress(true);
         results.classList.add("visible");
       } catch (err) {
+        clearTimeout(timeoutId);
         stopProgress(false);
-        error.textContent = err.message || "Unable to check availability. Please try again.";
+        if (err.name === "AbortError") {
+          error.textContent = "Server is busy right now. Please try again in a moment.";
+        } else {
+          error.textContent = err.message || "Unable to check availability. Please try again.";
+        }
         error.classList.add("visible");
       } finally {
         btn.disabled = false;
